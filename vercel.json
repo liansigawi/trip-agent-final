@@ -1,12 +1,12 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "api/execute.py": {
-      "maxDuration": 60,
-      "includeFiles": "agent/**"
-    },
-    "api/model_architecture.py": {
-      "includeFiles": "architecture.png"
-    }
-  }
+  "version": 2,
+  "builds": [
+    { "src": "api/execute.py", "use": "@vercel/python", "config": { "includeFiles": ["agent/**"] } },
+    { "src": "api/agent_info.py", "use": "@vercel/python" },
+    { "src": "api/team_info.py", "use": "@vercel/python" },
+    { "src": "api/model_architecture.py", "use": "@vercel/python", "config": { "includeFiles": ["architecture.png"] } }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "api/$1.py" }
+  ]
 }
