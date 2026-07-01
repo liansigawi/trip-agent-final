@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/execute.py": {
+      "maxDuration": 60,
+      "includeFiles": "agent/**"
+    },
+    "api/model_architecture.py": {
+      "includeFiles": "architecture.png"
+    }
+  }
+}

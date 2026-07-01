@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Trip Planning Agent</title>
+<style>
+  :root { --bg:#0f1626; --panel:#172033; --line:#2a3550; --txt:#e7ecf5; --mut:#9fb0cc; --acc:#3aa0ff; --ok:#3ecf8e; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,Segoe UI,Arial,sans-serif; background:var(--bg); color:var(--txt); }
+  .wrap { max-width:920px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--mut); font-size:13px; margin-bottom:20px; }
+  textarea { width:100%; min-height:70px; background:var(--panel); color:var(--txt); border:1px solid var(--line);
+             border-radius:10px; padding:12px 14px; font-size:14px; resize:vertical; }
+  .row { display:flex; gap:10px; align-items:center; margin-top:10px; }
+  button { background:var(--acc); color:#04101f; border:0; border-radius:9px; padding:11px 18px;
+           font-size:14px; font-weight:600; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--mut); border:1px solid var(--line); }
+  button:disabled { opacity:.55; cursor:default; }
+  .hint { color:var(--mut); font-size:12px; }
+  h2 { font-size:14px; text-transform:uppercase; letter-spacing:.05em; color:var(--mut); margin:30px 0 10px; }
+  /* chat */
+  .chat { display:flex; flex-direction:column; gap:10px; margin:8px 0 16px; }
+  .msg { max-width:86%; padding:10px 14px; border-radius:12px; font-size:14px; line-height:1.5; white-space:pre-wrap; word-wrap:break-word; }
+  .msg.user { align-self:flex-end; background:var(--acc); color:#04101f; border-bottom-right-radius:3px; }
+  .msg.agent { align-self:flex-start; background:var(--panel); border:1px solid var(--line); border-bottom-left-radius:3px; }
+  .msg .who { display:block; font-size:10px; text-transform:uppercase; letter-spacing:.05em; opacity:.7; margin-bottom:4px; }
+  .empty { color:var(--mut); font-size:13px; font-style:italic; padding:8px 2px; }
+  /* steps trace */
+  .step { background:var(--panel); border:1px solid var(--line); border-radius:10px; margin-bottom:10px; overflow:hidden; }
+  .step > summary { cursor:pointer; padding:11px 14px; font-weight:600; font-size:13px; list-style:none; }
+  .step > summary::-webkit-details-marker { display:none; }
+  .mod { display:inline-block; background:#22304d; color:var(--acc); border-radius:6px; padding:2px 8px; font-size:11px; margin-right:8px; }
+  pre { margin:0; padding:12px 14px; background:#0c1322; border-top:1px solid var(--line); overflow:auto;
+        font-size:12px; line-height:1.45; color:#cdd8ee; }
+  .lbl { color:var(--mut); font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:8px 14px 0; }
+  .err { color:#ff8c8c; }
+  .warn { background:#2a2410; border:1px solid #7a651f; color:#f2d98c; border-radius:8px;
+          padding:8px 10px; font-size:12px; line-height:1.5; margin-bottom:8px; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Trip Planning Agent</h1>
+  <div class="sub">Chat to plan a trip. The agent asks for any missing details, confirms your profile,
+    then plans a day-by-day itinerary once you approve. (Type <b>yes</b> to confirm.)</div>
+
+  <div id="chat" class="chat"><div class="empty" id="emptyHint">No messages yet — describe your trip below to begin.</div></div>
+
+  <textarea id="prompt" placeholder="e.g. 5 days in Lisbon for a couple, mid-range, love food &amp; viewpoints.">7 days in Japan, a couple, mid-range budget, love food and culture, must see Kyoto temples and Mt Fuji.</textarea>
+  <div class="row">
+    <button id="send" onclick="send()">Send</button>
+    <button id="reset" class="secondary" onclick="resetChat()">New conversation</button>
+    <span class="hint" id="status"></span>
+  </div>
+
+  <div id="out" style="display:none">
+    <h2>Execution trace (steps) — latest turn</h2>
+    <div id="steps"></div>
+  </div>
+</div>
+
+<script>
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const pretty = v => typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+
+// The backend is STATELESS: it keeps no session. The browser owns the whole conversation
+// and replays it (as a single transcript string) inside `prompt` on every submit.
+let history = [];   // [{ role: 'user' | 'agent', text }]
+
+// The backend folds unresolved critic issues into `response` as a leading blockquote
+// banner ("> ⚠️ Delivered with caveats…"). Split it out so we can highlight it.
+function splitCaveats(text) {
+  if (!text || !text.startsWith('> ⚠️')) return { banner: '', body: text };
+  const lines = text.split('\n');
+  const banner = [];
+  let i = 0;
+  for (; i < lines.length; i++) {
+    if (lines[i].startsWith('>')) banner.push(lines[i].replace(/^>\s?/, ''));
+    else break;
+  }
+  return { banner: banner.join('\n'), body: lines.slice(i).join('\n').replace(/^\n+/, '') };
+}
+
+function renderChat() {
+  const chat = document.getElementById('chat');
+  if (!history.length) {
+    chat.innerHTML = '<div class="empty">No messages yet — describe your trip below to begin.</div>';
+    return;
+  }
+  chat.innerHTML = '';
+  history.forEach(m => {
+    const div = document.createElement('div');
+    div.className = 'msg ' + m.role;
+    if (m.role === 'agent') {
+      const { banner, body } = splitCaveats(m.text || '');
+      div.innerHTML = '<span class="who">Agent</span>'
+        + (banner ? `<div class="warn">${esc(banner)}</div>` : '')
+        + esc(body || '(empty)');
+    } else {
+      div.innerHTML = '<span class="who">You</span>' + esc(m.text);
+    }
+    chat.appendChild(div);
+  });
+  chat.lastChild.scrollIntoView({ block: 'nearest' });
+}
+
+function renderSteps(steps) {
+  const stepsEl = document.getElementById('steps');
+  stepsEl.innerHTML = '';
+  (steps || []).forEach((s, i) => {
+    const d = document.createElement('details');
+    d.className = 'step';
+    d.innerHTML =
+      `<summary><span class="mod">${esc(s.module)}</span>Step ${i + 1}</summary>` +
+      `<div class="lbl">Prompt</div><pre>${esc(pretty(s.prompt))}</pre>` +
+      `<div class="lbl">Response</div><pre>${esc(pretty(s.response))}</pre>`;
+    stepsEl.appendChild(d);
+  });
+  document.getElementById('out').style.display = (steps && steps.length) ? 'block' : 'none';
+}
+
+// Serialize the whole conversation into the single transcript the backend intake parses.
+function transcript() {
+  return history.map(m => (m.role === 'user' ? 'User: ' : 'Agent: ') + m.text).join('\n');
+}
+
+function resetChat() {
+  history = [];
+  renderChat();
+  document.getElementById('steps').innerHTML = '';
+  document.getElementById('out').style.display = 'none';
+  document.getElementById('status').textContent = '';
+}
+
+async function send() {
+  const ta = document.getElementById('prompt');
+  const text = ta.value.trim();
+  if (!text) return;
+  const btn = document.getElementById('send'), st = document.getElementById('status');
+
+  history.push({ role: 'user', text });
+  renderChat();
+  ta.value = '';
+  btn.disabled = true; st.textContent = 'Thinking…';
+
+  try {
+    const r = await fetch('/api/execute', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: transcript() }),   // <-- ENTIRE history, backend stays stateless
+    });
+    const data = await r.json();
+    if (data.status !== 'ok') {
+      history.push({ role: 'agent', text: 'Error: ' + (data.error || 'unknown') });
+      renderSteps(data.steps);
+    } else {
+      history.push({ role: 'agent', text: data.response || '(empty)' });
+      renderSteps(data.steps);
+    }
+    renderChat();
+    st.textContent = `Done — ${(data.steps || []).length} step(s) this turn.`;
+  } catch (e) {
+    history.push({ role: 'agent', text: 'Request failed: ' + e.message });
+    renderChat();
+    st.textContent = '';
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

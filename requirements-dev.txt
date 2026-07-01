@@ -1,0 +1,4 @@
+# Dev/CI only — NOT bundled into the Vercel functions.
+-r requirements.txt
+pytest>=8,<9
+ruff>=0.6
